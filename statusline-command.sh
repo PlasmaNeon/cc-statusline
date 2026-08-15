@@ -366,7 +366,10 @@ if [ -n "$pr_number" ]; then
         approved)          pr_color="${GAUGE[0]}"; pr_label="approved" ;;
         changes_requested) pr_color="${GAUGE[3]}"; pr_label="changes" ;;
         *)
-          if [ "$pr_kind" = "draft" ]; then
+          # A draft arrives as either field depending on the CLI version, so
+          # both spellings count - checking only one renders it as a plain
+          # open PR.
+          if [ "$pr_kind" = "draft" ] || [ "$pr_review" = "draft" ]; then
             pr_color="$C_LABEL"; pr_label="draft"
           else
             pr_color="$C_PR"
