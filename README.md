@@ -116,24 +116,6 @@ the previous segment), `space`, `colon`. Reorder the calls to reorder the bar;
 a separator chosen at runtime lets a group open with `bar` whether or not the
 segment ahead of it was rendered.
 
-### JIRA links on the branch
-
-If the branch name contains a ticket key, the branch becomes a clickable link
-(OSC 8) to that ticket. Enable it per machine by writing the browse endpoint to
-`~/.claude/jira-base`:
-
-```sh
-echo https://jira.purestorage.com/browse > ~/.claude/jira-base
-```
-
-`CLAUDE_STATUSLINE_JIRA_BASE` overrides the file. With neither set the branch is
-plain text, so personal machines are unaffected.
-
-Keys are matched as `PURE-<n>` or `IR-<n>`, case-insensitively, on a word
-boundary — so `their-123-branch` is not mistaken for `IR-123` — and uppercased
-for the URL. The first key wins when a branch names several. To match other
-projects, edit the two `grep -oiE` patterns in the `git branch` section.
-
 ### Branch icon
 
 The glyph before the branch is `U+E725` (Nerd Font devicons). If it renders as a

@@ -310,30 +310,7 @@ if [ -n "$branch" ]; then
     fi
   fi
 
-  # A JIRA ticket in the branch name becomes a clickable link (OSC 8) when a
-  # browse endpoint is configured, either in CLAUDE_STATUSLINE_JIRA_BASE or in
-  # ~/.claude/jira-base. With neither - as on a personal machine - the branch
-  # renders as plain text. The key is matched on a boundary, so "their-123"
-  # cannot masquerade as IR-123.
-  branch_text="$branch"
-  jira_base="$CLAUDE_STATUSLINE_JIRA_BASE"
-  if [ -z "$jira_base" ] && [ -r "$HOME/.claude/jira-base" ]; then
-    read -r jira_base < "$HOME/.claude/jira-base"
-  fi
-  if [ -n "$jira_base" ]; then
-    jira_key=$(printf '%s' "$branch" |
-      grep -oiE '(^|[^a-z0-9])(pure|ir)-[0-9]+' |
-      head -1 |
-      grep -oiE '(pure|ir)-[0-9]+' |
-      tr '[:lower:]' '[:upper:]')
-    if [ -n "$jira_key" ]; then
-      # ST (ESC backslash) terminator rather than BEL: some renderers in the
-      # path eat BEL-terminated OSC sequences.
-      branch_text=$(printf '\033]8;;%s/%s\033\\%s\033]8;;\033\\' \
-        "${jira_base%/}" "$jira_key" "$branch")
-    fi
-  fi
-  git_seg=$(printf "${C_BRANCH} %s${RESET}" "$branch_text")
+  git_seg=$(printf "${C_BRANCH} %s${RESET}" "$branch")
   [ -n "$status_str" ] && git_seg="${git_seg}$(printf "${C_ERR}[%s]${RESET}" "$status_str")"
   add_seg "$git_seg" bar
   loc_started=1
