@@ -1,17 +1,20 @@
 # Claude Code status line
 
+Always one line:
+
 ```
-Opus 5 (1M context) high ctx 37% · duhuang@host:~/fb-devices-ai  main · $1.23 · 5h 62% 7d 89% Fable 7%
+Opus 5 (1M context) high ctx 37% ·  main duhuang@host:~/fb-devices-ai · $1.23 · 5h 62% 7d 89%
 ```
 
-Model, effort level, context usage, user@machine, working directory, git branch,
-session cost, and the 5-hour / weekly / model-scoped rate limits.
+Too narrow for the whole thing, and the terminal clips the tail:
+
+```
+Opus 5 (1M context) high ctx 37% ·  main duhuang@host:~/fb-de…
+```
 
 ## Install
 
 ```sh
-git clone https://github.com/PlasmaNeon/cc-statusline.git
-cd cc-statusline
 ./install.sh              # install
 ./install.sh --dry-run    # preview, change nothing
 ```
@@ -28,16 +31,18 @@ is needed for the branch glyph; without one it shows as a box — see *Branch ic
 | Segment | Notes |
 |---|---|
 | model | bold, Claude terracotta |
-| effort | the exact per-level colors from the `/effort` picker |
-| `ctx NN%` | context window used |
-| `user@host:path` | path shortened to `~` and its last 3 components |
+| effort | the per-level colors from the `/effort` picker, identical in any theme |
+| `ctx NN%` | context window used, grouped with the effort level |
 | branch | git branch, with `+` staged, `!` modified, `?` untracked, `=` conflict, `<`/`>` behind/ahead |
+| `user@host:path` | path shortened to `~` and its last 3 components |
+| `#42 approved` | pull request for the branch, colored by state — needs `gh` installed and authenticated, hidden otherwise |
 | `$N.NN` | session cost, from the CLI's own `cost.total_cost_usd` |
 | `5h` / `7d` | rate limit usage |
 | `Fable NN%` | the model-scoped weekly limit — see *Model-scoped limit* |
 
 Percentages use a six-band color ramp: green `<30`, lime `<50`, gold `<65`,
-amber `<80`, orange `<90`, red `90+`.
+amber `<80`, orange `<90`, red `90+`. PR states: green approved, amber changes
+requested, grey draft, violet merged, red closed.
 
 `xhigh` and `max` are animated in the `/effort` picker, which a status line
 cannot reproduce — it only redraws on state changes. They instead advance one
@@ -55,38 +60,79 @@ it follows a rename rather than hardcoding "Fable", and it is omitted entirely
 when no such limit exists. A separate `ovr` segment shows the overage limit if
 the payload ever carries one.
 
+Both sit at the tail of the line, so they are the first thing a narrow window
+clips.
+
+## Layout
+
+Everything is emitted as a single line, in segment order, at whatever length it
+comes to. Nothing is measured and nothing is pre-wrapped: the CLI renders each
+status line with `wrap="truncate"`, so a line wider than the window is clipped
+by the terminal on the way out. That costs only the tail — the rate-limit
+gauges — and costs nothing at any width the content already fits.
+
+Measuring would be worse, not better. The CLI re-runs this command when *session
+state* changes — a new message, a token count, a model or effort switch — and a
+terminal resize is not one of those triggers. A layout chosen from the width at
+render time therefore outlives the resize that invalidated it, and an idle
+session sits on a stale two-line split long after the window grew wide enough
+for one. Clipping is re-evaluated by the terminal on every repaint, so it is
+always current.
+
+Order it front to back, then: the segments you always want visible go first.
+
 ## Theme
 
-Light and dark palettes are both defined, resolved in this order:
+One palette, not two. The theme cannot be detected reliably from inside a status
+line:
 
-1. `CLAUDE_STATUSLINE_THEME` (`light` / `dark`)
-2. `theme` in `~/.claude/settings.json`
-3. `COLORFGBG`
-4. macOS system appearance
-5. light
+- `COLORFGBG` is captured when the shell starts and never updates when the
+  terminal's theme changes under a running session.
+- A remote login forwards neither it nor macOS's `AppleInterfaceStyle`, and
+  `defaults` is macOS-only.
 
-On a remote login `COLORFGBG` is not forwarded and `defaults` does not exist, so
-those hosts land on step 5 — set `CLAUDE_STATUSLINE_THEME=dark` there if needed.
+So a palette picked from those signals is wrong exactly when it matters — and
+the wrong half is dead code the rest of the time. Every color here is instead
+chosen to clear roughly 3.5:1 contrast against both white and black. The hues
+are Claude Code's own, pulled to the midpoint of its light and dark palettes.
 
-## Width and wrapping
-
-The payload carries no terminal width, so it comes from `/dev/tty`, then
-`COLUMNS` (what the CLI actually exports), defaulting to 200. Segments wrap onto
-extra lines when they do not fit; tight groups such as `user@host:path branch`
-never break apart. Override with `CLAUDE_STATUSLINE_WIDTH=100` to test.
+That includes the effort levels, the `xhigh` shimmer crest and the `max`
+rainbow: a level always reads as the same color, whatever the terminal is set
+to. There is nothing to pin and nothing to configure — `CLAUDE_STATUSLINE_THEME`
+and `~/.claude/statusline-theme` are no longer read.
 
 ## Customizing
 
 All near the top of `statusline-command.sh`:
 
-- `C_*` — segment colors, one block per theme
+- `C_*` — segment colors (one palette, checked against both backgrounds)
 - `E_*` — effort level colors
 - `GAUGE` — the six-band percentage ramp
 - `RAINBOW_SUBSTEPS` / `_SPREAD` / `_STEP` — `max` gradient resolution, width, speed
 
 Layout is built from `add_seg "<text>" <separator>` calls in source order.
-Separators: `bar` (` · `), `space`, `colon` (`:`). Reorder the calls to reorder
-the bar; `space` and `colon` also bind a segment to the previous one for wrapping.
+Separators: `bar` (` · ` between groups), `bar_tight` (same divider, bound to
+the previous segment), `space`, `colon`. Reorder the calls to reorder the bar;
+a separator chosen at runtime lets a group open with `bar` whether or not the
+segment ahead of it was rendered.
+
+### JIRA links on the branch
+
+If the branch name contains a ticket key, the branch becomes a clickable link
+(OSC 8) to that ticket. Enable it per machine by writing the browse endpoint to
+`~/.claude/jira-base`:
+
+```sh
+echo https://jira.purestorage.com/browse > ~/.claude/jira-base
+```
+
+`CLAUDE_STATUSLINE_JIRA_BASE` overrides the file. With neither set the branch is
+plain text, so personal machines are unaffected.
+
+Keys are matched as `PURE-<n>` or `IR-<n>`, case-insensitively, on a word
+boundary — so `their-123-branch` is not mistaken for `IR-123` — and uppercased
+for the URL. The first key wins when a branch names several. To match other
+projects, edit the two `grep -oiE` patterns in the `git branch` section.
 
 ### Branch icon
 
@@ -96,6 +142,6 @@ character.
 
 ## Notes
 
-Colors are the literal values from Claude Code's own themes, read out of the
-CLI binary (v2.1.231), so the bar matches the rest of the interface. A future
-version could rename them.
+Colors started as the literal values from Claude Code's own themes, read out of
+the CLI binary (v2.1.231), and were then reconciled into the single palette
+described under *Theme*. A future CLI version could rename them.

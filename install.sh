@@ -43,8 +43,8 @@ $dry_run && { say "dry run complete, nothing changed"; exit 0; }
 
 say ""
 say "preview:"
-printf '{"workspace":{"current_dir":"%s"},"model":{"display_name":"Opus 5"},"effort":{"level":"high"},"cost":{"total_cost_usd":1.23},"context_window":{"used_percentage":37},"rate_limits":{"five_hour":{"used_percentage":62},"seven_day":{"used_percentage":89}}}' "$PWD" \
-  | COLUMNS=${COLUMNS:-159} bash "$dest"
+printf '{"workspace":{"current_dir":"%s"},"cwd":"%s","model":{"display_name":"Opus 5"},"effort":{"level":"high"},"cost":{"total_cost_usd":1.23},"context_window":{"used_percentage":37},"rate_limits":{"five_hour":{"used_percentage":62},"seven_day":{"used_percentage":89}}}' "$PWD" "$PWD" \
+  | bash "$dest"
 say ""
 say ""
 say "done - restart Claude Code to pick it up"
