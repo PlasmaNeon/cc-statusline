@@ -2,10 +2,9 @@
 # Claude Code statusLine command.
 #
 # Segments (in order): model name, effort level, context-window usage %,
-# git branch, user@machine, current directory, the pull request for that
-# branch, session cost ($ spent), 5-hour and weekly rate-limit %, the
-# model-scoped weekly rate-limit % (Fable), and - if the CLI ever exposes
-# it - the overage limit %.
+# git branch, user@machine, current directory, session cost ($ spent),
+# 5-hour and weekly rate-limit %, the model-scoped weekly rate-limit %
+# (Fable), and - if the CLI ever exposes it - the overage limit %.
 #
 # They are always emitted as one line, in that order. Nothing is wrapped or
 # re-flowed here; a window too narrow for the whole line simply clips its tail.
@@ -17,7 +16,7 @@
 
 input=$(cat)
 
-IFS=$'\t' read -r cwd worktree model_name effort_level cost_usd ctx_pct five_hr_pct weekly_pct overage_pct session_id transcript_path pr_number pr_kind pr_review scoped_pct scoped_name <<<"$(
+IFS=$'\t' read -r cwd worktree model_name effort_level cost_usd ctx_pct five_hr_pct weekly_pct overage_pct session_id transcript_path scoped_pct scoped_name <<<"$(
   echo "$input" | jq -r '
     # A model-scoped weekly limit (currently Fable). The field names the CLI
     # uses here are not settled, so every plausible spelling is accepted.
@@ -37,9 +36,6 @@ IFS=$'\t' read -r cwd worktree model_name effort_level cost_usd ctx_pct five_hr_
         // .rate_limits.overage.used_percentage // "-"),
       (.session_id // "-"),
       (.transcript_path // "-"),
-      (.pr.number // "-"),
-      (.pr.kind // "-"),
-      (.pr.review_state // "-"),
       ((scoped | (.utilization // .used_percentage // .percent)) // "-" | tostring),
       ((scoped | (.display_name // .scope.model.display_name)) // "-")
     ] | @tsv' 2>/dev/null
@@ -57,9 +53,6 @@ weekly_pct=$(unset_if_dash "$weekly_pct")
 overage_pct=$(unset_if_dash "$overage_pct")
 session_id=$(unset_if_dash "$session_id")
 transcript_path=$(unset_if_dash "$transcript_path")
-pr_number=$(unset_if_dash "$pr_number")
-pr_kind=$(unset_if_dash "$pr_kind")
-pr_review=$(unset_if_dash "$pr_review")
 scoped_pct=$(unset_if_dash "$scoped_pct")
 scoped_name=$(unset_if_dash "$scoped_name")
 
@@ -84,8 +77,14 @@ fi
 # when the terminal's theme changes under a running session, and a remote host
 # forwards neither it nor macOS's appearance setting. A palette picked from a
 # stale signal is wrong exactly when it matters, so every color here is instead
-# chosen to clear roughly 3.5:1 contrast against both white and black. The hues
+# chosen to clear roughly 3:1 contrast against both white and black. The hues
 # are the Claude theme's, pulled to the midpoint of its two palettes.
+#
+# The /effort colors below are the deliberate exception: every one copies the
+# picker verbatim rather than compromising - the dark theme's value where the
+# CLI themes the color, the single hardcoded value where it does not - so the
+# whole ramp reads exactly as the picker on a dark terminal, and washes out on
+# a light one.
 RESET=$'\033[0m'
 BOLD=$'\033[1m'
 DIM=$'\033[2m'
@@ -97,25 +96,33 @@ C_BRANCH=$(fg 186 92 124)    # rose - git branch
 C_COST=$(fg 176 128 18)      # "warning" amber - money spent
 C_LABEL=$(fg 128 128 128)    # "inactive" - labels
 C_ERR=$(fg 208 72 94)        # "error" - git dirty marker
-C_MERGED=$(fg 150 90 235)    # "merged" - a merged PR
-C_PR=$(fg 71 130 200)        # "ide" blue - an open PR with no verdict yet
 # gauge ramp, green -> red, anchored on "success"/"warning"/"error"
 GAUGE=("$(fg 46 140 64)" "$(fg 110 150 45)" "$(fg 176 128 18)"
        "$(fg 196 110 30)" "$(fg 206 84 60)" "$(fg 203 60 80)")
-# /effort picker colors, one per level (see Kvl in the CLI). Deliberately
-# identical whatever the terminal's theme is, so a level always reads as the
-# same color.
-E_LOW=$(fg 176 128 18)       # "warning"
-E_MEDIUM=$(fg 46 140 64)     # "success"
-E_HIGH=$(fg 110 125 240)     # "permission"
-E_XHIGH=$(fg 150 90 235)     # "autoAccept" (base under the shimmer)
+# /effort picker colors, one per level - the picker's exact values, and the one
+# place this file does not take the two-theme midpoint. The CLI paints each
+# level through a named theme key, so "the picker's color" is only well defined
+# per theme; these are the dark theme's, which is what the picker renders on a
+# dark terminal.
+#
+#   low "warning" | medium "success" | high "permission" | xhigh "autoAccept"
+#
+# The key names are borrowed hues, not meanings: the picker wanted an escalating
+# ramp and reached for the palette entries sitting on it. Matching exactly costs
+# the light-background legibility the rest of this palette keeps - on white these
+# run 1.6-2.7:1 against the ~3:1 floor everything else clears. Deliberate: the
+# picker is the reference, and the picker here is dark.
+E_LOW=$(fg 255 193 7)        # "warning"
+E_MEDIUM=$(fg 78 186 101)    # "success"
+E_HIGH=$(fg 177 185 249)     # "permission"
+E_XHIGH=$(fg 175 135 255)    # "autoAccept" (base under the shimmer)
 
-# "violet-ripple" (ultracode) and the "rainbow-animated" cycle (max) are
-# hardcoded in the CLI rather than themed. The CLI can afford pastels because
-# it only ever paints them on its own background; these are the same hues held
-# to the contrast floor the rest of the palette keeps.
-E_SHIMMER=$(fg 168 120 245)   # the shimmer crest: the CLI's #d0b4ff darkened
-                              # enough to stay visible on a white background
+# The shimmer crest and "violet-ripple" (ultracode) are hardcoded in the CLI
+# rather than themed, so they carry no per-theme ambiguity and are copied
+# verbatim. The ripple's gradient runs rgb(62,22,118) -> rgb(140,80,240); the
+# status line only ever shows the settled end, which is the picker's fill for
+# the selected row.
+E_SHIMMER=$(fg 208 180 255)   # the crest, the CLI's #d0b4ff
 E_ULTRA_BG=$'\033[48;2;140;80;240m'
 E_ULTRA_FG=$'\033[38;2;255;255;255m'
 
@@ -124,12 +131,18 @@ E_ULTRA_FG=$'\033[38;2;255;255;255m'
 # clashing letters. So the stops are interpolated into a finer wheel: the
 # word becomes a smooth slice of gradient, and each frame rotates it by a
 # full stop - subtle within the word, obvious between messages.
+#
+# The stops themselves are the CLI's verbatim. Unlike the four levels above
+# there is no theme to choose between: the seven rainbow_* keys hold the same
+# pastels in every Claude theme, so this match is unconditional. They are also
+# the palette's lightest colors - yellow is 1.6:1 on white - which is the same
+# dark-terminal trade the rest of the effort ramp now makes.
 RAINBOW_SUBSTEPS=6            # interpolated colors between adjacent stops
 RAINBOW_SPREAD=3              # wheel positions between neighbouring letters
 RAINBOW_STEP=$RAINBOW_SUBSTEPS  # wheel positions advanced per frame
 RAINBOW=()
 while IFS= read -r _c; do RAINBOW+=("$_c"); done < <(awk -v n="$RAINBOW_SUBSTEPS" 'BEGIN{
-  split("214,82,74 216,118,60 190,140,30 96,160,88 82,130,200 140,110,200 190,100,160", stops, " ")
+  split("235,95,87 245,139,87 250,195,95 145,200,130 130,170,220 155,130,200 200,130,180", stops, " ")
   for (k = 1; k <= 7; k++) { split(stops[k], c, ","); R[k] = c[1]; G[k] = c[2]; B[k] = c[3] }
   for (k = 1; k <= 7; k++) {
     nx = (k % 7) + 1
@@ -221,8 +234,15 @@ rainbow_text() {
   printf "${BOLD}%s${RESET}" "$out"
 }
 
-# "autoAccept-shimmer" (xhigh): a crest travels the word on a period of
-# len+4, lit in #d0b4ff with its two neighbours bolded.
+# "autoAccept-shimmer" (xhigh): a crest travels the word on a period of len+4,
+# lit in #d0b4ff against the autoAccept base.
+#
+# The CLI also passes bold per character - true on the crest and its two
+# neighbours, false elsewhere - but that flag never reaches the terminal: the
+# word is wrapped in one bold Text and Ink emits no bold-off code, so the
+# wrapper bolds every letter and the per-character flag is dead. Measured off
+# the picker: a neighbour and a non-neighbour glyph are pixel-identical. So the
+# crest is a color event only, and the whole word is bold.
 shimmer_text() {
   local text="$1" len period crest i=0 ch out=""
   len=${#text}
@@ -231,15 +251,13 @@ shimmer_text() {
   while [ "$i" -lt "$len" ]; do
     ch="${text:$i:1}"
     if [ "$i" -eq "$crest" ]; then
-      out="${out}${RESET}${BOLD}${E_SHIMMER}${ch}"
-    elif [ "$i" -eq $((crest - 1)) ] || [ "$i" -eq $((crest + 1)) ]; then
-      out="${out}${RESET}${BOLD}${E_XHIGH}${ch}"
+      out="${out}${E_SHIMMER}${ch}"
     else
-      out="${out}${RESET}${E_XHIGH}${ch}"
+      out="${out}${E_XHIGH}${ch}"
     fi
     i=$((i + 1))
   done
-  printf "%s${RESET}" "$out"
+  printf "${BOLD}%s${RESET}" "$out"
 }
 
 # ---- model name ----
@@ -247,12 +265,12 @@ shimmer_text() {
   add_seg "$(printf "${BOLD}${C_CLAUDE}%s${RESET}" "$model_name")" bar
 
 # ---- effort level, in the /effort picker's per-level color ----
-# low/medium/high render at normal weight; the animated levels stay bold.
+# Every level is bold, as the picker draws the selected one.
 if [ -n "$effort_level" ]; then
   case "$effort_level" in
-    low)       effort_seg=$(printf "${E_LOW}low${RESET}") ;;
-    medium)    effort_seg=$(printf "${E_MEDIUM}medium${RESET}") ;;
-    high)      effort_seg=$(printf "${E_HIGH}high${RESET}") ;;
+    low)       effort_seg=$(printf "${BOLD}${E_LOW}low${RESET}") ;;
+    medium)    effort_seg=$(printf "${BOLD}${E_MEDIUM}medium${RESET}") ;;
+    high)      effort_seg=$(printf "${BOLD}${E_HIGH}high${RESET}") ;;
     xhigh)     effort_seg=$(shimmer_text "xhigh") ;;
     max)       effort_seg=$(rainbow_text "max") ;;
     ultracode) effort_seg=$(printf "${BOLD}${E_ULTRA_BG}${E_ULTRA_FG} ultracode ${RESET}") ;;
@@ -262,7 +280,13 @@ if [ -n "$effort_level" ]; then
 fi
 
 # ---- context window used %, grouped with the effort level ----
-[ -n "$ctx_pct" ] && add_seg "$(gauge_segment ctx "$ctx_pct")" space
+# The label is nf-md-database_outline (U+F1632), the same Material Design set
+# the read-only lock above comes from. It needs a Nerd Font; the two gauges
+# below stay lettered, so a terminal without one loses this glyph and nothing
+# else. Nothing here measures display width - the line is emitted whole and
+# clipped by the terminal - so a one-cell glyph in place of three letters is
+# purely a rendering change.
+[ -n "$ctx_pct" ] && add_seg "$(gauge_segment "󱘲" "$ctx_pct")" space
 
 
 
@@ -351,39 +375,6 @@ elif [ -n "$loc_started" ]; then dir_sep=space
 else                             dir_sep=bar
 fi
 add_seg "$(printf "${C_DIR}%s${RESET}" "${path_display}${read_only}")" "$dir_sep"
-
-# ---- pull request for the current branch ----
-# Present only when the CLI resolved a PR (it shells out to `gh`, so this stays
-# invisible without gh installed and authenticated). Merged/closed outrank a
-# review verdict, which in turn outranks plain draft/open.
-if [ -n "$pr_number" ]; then
-  pr_label=""
-  case "$pr_kind" in
-    merged) pr_color="$C_MERGED"; pr_label="merged" ;;
-    closed) pr_color="$C_ERR";    pr_label="closed" ;;
-    *)
-      case "$pr_review" in
-        approved)          pr_color="${GAUGE[0]}"; pr_label="approved" ;;
-        changes_requested) pr_color="${GAUGE[3]}"; pr_label="changes" ;;
-        *)
-          # A draft arrives as either field depending on the CLI version, so
-          # both spellings count - checking only one renders it as a plain
-          # open PR.
-          if [ "$pr_kind" = "draft" ] || [ "$pr_review" = "draft" ]; then
-            pr_color="$C_LABEL"; pr_label="draft"
-          else
-            pr_color="$C_PR"
-          fi
-          ;;
-      esac
-      ;;
-  esac
-  if [ -n "$pr_label" ]; then
-    add_seg "$(printf "${pr_color}#%s${RESET} ${DIM}${C_LABEL}%s${RESET}" "$pr_number" "$pr_label")" bar
-  else
-    add_seg "$(printf "${pr_color}#%s${RESET}" "$pr_number")" bar
-  fi
-fi
 
 # ---- money spent this session (authoritative value from the CLI) ----
 if [ -n "$cost_usd" ]; then

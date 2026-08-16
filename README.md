@@ -24,7 +24,7 @@ Copies `statusline-command.sh` to `~/.claude/` and sets the `statusLine` key in
 key is replaced, and a timestamped `.bak` is written. Restart Claude Code after.
 
 Requires `bash` (3.2 is fine, so stock macOS works), `jq`, and `git`. A Nerd Font
-is needed for the branch glyph; without one it shows as a box — see *Branch icon*.
+is needed for three glyphs; without one they show as boxes — see *Nerd Font glyphs*.
 
 ## What it shows
 
@@ -32,17 +32,15 @@ is needed for the branch glyph; without one it shows as a box — see *Branch ic
 |---|---|
 | model | bold, Claude terracotta |
 | effort | the per-level colors from the `/effort` picker, identical in any theme |
-| `ctx NN%` | context window used, grouped with the effort level |
+| `󱘲 NN%` | context window used, grouped with the effort level — the label is `nf-md-database_outline`, so it needs a Nerd Font |
 | branch | git branch, with `+` staged, `!` modified, `?` untracked, `=` conflict, `<`/`>` behind/ahead |
 | `user@host:path` | path shortened to `~` and its last 3 components |
-| `#42 approved` | pull request for the branch, colored by state — needs `gh` installed and authenticated, hidden otherwise |
 | `$N.NN` | session cost, from the CLI's own `cost.total_cost_usd` |
 | `5h` / `7d` | rate limit usage |
 | `Fable NN%` | the model-scoped weekly limit — see *Model-scoped limit* |
 
 Percentages use a six-band color ramp: green `<30`, lime `<50`, gold `<65`,
-amber `<80`, orange `<90`, red `90+`. PR states: green approved, amber changes
-requested, grey draft, violet merged, red closed.
+amber `<80`, orange `<90`, red `90+`.
 
 `xhigh` and `max` are animated in the `/effort` picker, which a status line
 cannot reproduce — it only redraws on state changes. They instead advance one
@@ -116,11 +114,19 @@ the previous segment), `space`, `colon`. Reorder the calls to reorder the bar;
 a separator chosen at runtime lets a group open with `bar` whether or not the
 segment ahead of it was rendered.
 
-### Branch icon
+### Nerd Font glyphs
 
-The glyph before the branch is `U+E725` (Nerd Font devicons). If it renders as a
-box, either install a Nerd Font or replace it in the `git_seg=` line with a plain
-character.
+Three glyphs need a Nerd Font. If any renders as a box, either install one or
+replace that character with plain text.
+
+| Glyph | Codepoint | Where |
+|---|---|---|
+| `` | `U+E725` — `dev-git_branch` | before the branch, in the `git_seg=` line |
+| `󱘲` | `U+F1632` — `md-database_outline` | the context-window label, in the `gauge_segment` call |
+| `󰌾` | `U+F033E` — `md-lock` | after the path, only when the directory is read-only |
+
+The rate-limit gauges stay lettered (`5h`, `7d`), so a terminal without a Nerd
+Font still reads correctly everywhere else.
 
 ## Notes
 
