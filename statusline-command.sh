@@ -4,7 +4,9 @@
 # Segments (in order): model name, effort level, context-window usage %,
 # git branch, user@machine, current directory, session cost ($ spent),
 # 5-hour and weekly rate-limit %, the model-scoped weekly rate-limit %
-# (Fable), and - if the CLI ever exposes it - the overage limit %.
+# (Fable), the overage limit % (if the CLI ever exposes it in the live
+# payload), and the account's usage-credit balance ((used/limit), from
+# the local usage cache).
 #
 # They are always emitted as one line, in that order. Nothing is wrapped or
 # re-flowed here; a window too narrow for the whole line simply clips its tail.
@@ -71,6 +73,26 @@ if [ -z "$scoped_pct" ] && [ -f "$HOME/.claude.json" ]; then
   )"
 fi
 
+# The stdin payload's rate_limits carry only percentages (five_hour, seven_day,
+# and the model-scoped weekly limit above) - never an absolute balance. The one
+# absolute figure the CLI has - the account's usage-credit balance, used/limit in
+# dollars - is not in the payload at all; it lives only in the same usage cache
+# read above, fetched periodically rather than per redraw. So it is read from
+# there, exactly like the scoped weekly limit's fallback, and simply omitted
+# for accounts where the credit program is not enabled (spend.enabled false).
+credits_used_minor=""; credits_limit_minor=""; credits_exp=""; credits_pct=""
+if [ -f "$HOME/.claude.json" ]; then
+  IFS=$'\t' read -r credits_used_minor credits_limit_minor credits_exp credits_pct <<<"$(
+    jq -r '
+      .cachedUsageUtilization.utilization.spend as $s
+      | if ($s != null) and ($s.enabled == true)
+           and ($s.used.amount_minor != null) and ($s.limit.amount_minor != null)
+        then [$s.used.amount_minor, $s.limit.amount_minor,
+              ($s.used.exponent // 2), ($s.percent // 0)] | @tsv
+        else empty end' "$HOME/.claude.json" 2>/dev/null
+  )"
+fi
+
 # ---- palette ----
 # One palette, not two. The theme cannot be detected reliably from inside a
 # status line: COLORFGBG is captured when the shell starts and never updates
@@ -93,7 +115,7 @@ fg() { printf '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"; }
 C_CLAUDE=$(fg 215 119 87)    # "claude" terracotta - model name
 C_DIR=$(fg 14 140 158)       # cyan - cwd
 C_BRANCH=$(fg 186 92 124)    # rose - git branch
-C_COST=$(fg 176 128 18)      # "warning" amber - money spent
+C_COST=$(fg 107 128 104)     # sage #6b8068 - money spent
 C_LABEL=$(fg 128 128 128)    # "inactive" - labels
 C_ERR=$(fg 208 72 94)        # "error" - git dirty marker
 # gauge ramp, green -> red, anchored on "success"/"warning"/"error"
@@ -218,6 +240,16 @@ gauge_segment() {
   color=$(color_for_pct "$pct")
   str=$(awk -v p="$pct" 'BEGIN{printf "%.0f", p}')
   printf "${DIM}${C_LABEL}%s${RESET} ${color}%s%%${RESET}" "$label" "$str"
+}
+
+# a "(used/limit)" gauge segment - same ramp as gauge_segment, but for an
+# absolute used/limit balance (minor units + exponent) rather than a percentage
+credits_segment() {
+  local used_minor="$1" limit_minor="$2" exp="$3" pct="$4" color str
+  color=$(color_for_pct "$pct")
+  str=$(awk -v u="$used_minor" -v l="$limit_minor" -v e="$exp" \
+    'BEGIN{d=10^e; printf "(%.0f/%.0f)", u/d, l/d}')
+  printf "${color}%s${RESET}" "$str"
 }
 
 # "rainbow-animated" (max): letters sit RAINBOW_SPREAD apart on the wheel and
@@ -376,11 +408,18 @@ else                             dir_sep=bar
 fi
 add_seg "$(printf "${C_DIR}%s${RESET}" "${path_display}${read_only}")" "$dir_sep"
 
-# ---- money spent this session (authoritative value from the CLI) ----
+# ---- money spent this session (authoritative value from the CLI), with the
+# account's usage-credit balance bound tightly to it: "$1.23(1502/3000)" ----
+money_seg=""
 if [ -n "$cost_usd" ]; then
   cost_str=$(awk -v c="$cost_usd" 'BEGIN{printf "%.2f", c+0}')
-  add_seg "$(printf "${C_COST}\$%s${RESET}" "$cost_str")" bar
+  money_seg=$(printf "${C_COST}\$%s${RESET}" "$cost_str")
 fi
+if [ -n "$credits_used_minor" ] && [ -n "$credits_limit_minor" ]; then
+  money_seg="${money_seg}$(credits_segment "$credits_used_minor" \
+    "$credits_limit_minor" "$credits_exp" "$credits_pct")"
+fi
+[ -n "$money_seg" ] && add_seg "$money_seg" bar
 
 # ---- rate limits, kept on the same line as the cost ----
 # The model-scoped limit is labelled with its own display name, so it reads

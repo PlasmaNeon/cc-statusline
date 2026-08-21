@@ -3,13 +3,13 @@
 Always one line:
 
 ```
-Opus 5 (1M context) high ctx 37% ·  main duhuang@host:~/fb-devices-ai · $1.23 · 5h 62% 7d 89%
+Opus 5 (1M context) high 󱘲 37% ·  main duhuang@host:~/fb-devices-ai · $1.23(15/300) · 5h 62% 7d 89%
 ```
 
 Too narrow for the whole thing, and the terminal clips the tail:
 
 ```
-Opus 5 (1M context) high ctx 37% ·  main duhuang@host:~/fb-de…
+Opus 5 (1M context) high 󱘲 37% ·  main duhuang@host:~/fb-de…
 ```
 
 ## Install
@@ -36,6 +36,7 @@ is needed for three glyphs; without one they show as boxes — see *Nerd Font gl
 | branch | git branch, with `+` staged, `!` modified, `?` untracked, `=` conflict, `<`/`>` behind/ahead |
 | `user@host:path` | path shortened to `~` and its last 3 components |
 | `$N.NN` | session cost, from the CLI's own `cost.total_cost_usd` |
+| `(used/limit)` | usage-credit balance in dollars, bound tight to the cost — see *Usage credits* |
 | `5h` / `7d` | rate limit usage |
 | `Fable NN%` | the model-scoped weekly limit — see *Model-scoped limit* |
 
@@ -60,6 +61,19 @@ the payload ever carries one.
 
 Both sit at the tail of the line, so they are the first thing a narrow window
 clips.
+
+## Usage credits
+
+The stdin payload's `rate_limits` carry percentages only — never an absolute
+balance. The one absolute figure the CLI has, the account's usage-credit balance,
+is not in the payload at all; it lives in `cachedUsageUtilization.utilization.spend`
+in `~/.claude.json`, refreshed periodically rather than per redraw. So it is read
+from there, exactly like the model-scoped limit's fallback above, and rendered as
+`(used/limit)` in whole dollars glued to the session cost: `$1.23(15/300)`. It
+takes the same six-band ramp as the gauges, colored by `spend.percent`.
+
+Accounts without the credit program (`spend.enabled` false, or no `spend` at all)
+get no segment — the cost stands alone.
 
 ## Layout
 
