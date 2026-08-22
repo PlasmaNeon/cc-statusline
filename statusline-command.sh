@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Claude Code statusLine command.
 #
 # Segments (in order): model name, effort level, context-window usage %,
@@ -12,14 +12,30 @@
 # re-flowed here; a window too narrow for the whole line simply clips its tail.
 # See the join at the bottom of the file for why measuring is the worse option.
 #
-# Colors started as the literal Claude theme palettes read out of the
-# installed CLI (v2.1.231), reconciled into the single palette below - see
-# the palette section for why the theme is not detected at all.
+# Colors are the literal Claude theme palettes read out of the installed CLI
+# (v2.1.239). The /effort ramp, the labels, the git-dirty marker, and the gauge
+# follow the active theme; the remaining hues are one palette that holds on
+# either background - see the palette section.
+#
+# Portability: bash 3.2 and POSIX tools, because macOS still ships bash 3.2 and
+# the CLI runs this through whatever "bash" is on PATH. So no associative
+# arrays, no "grep -P", and nothing that assumes GNU over BSD flags - the two
+# places where the implementations genuinely differ (stat, hostname) each carry
+# both spellings. Beyond bash the script needs jq, awk, and git; without jq the
+# payload simply reads empty and the line falls back to what it can derive
+# locally, rather than failing.
 
 input=$(cat)
 
+# awk does every number this line formats, and awk's printf follows LC_NUMERIC:
+# under a comma locale the cost renders "$1,23" and the gauges pick up the same
+# separator. Reading is unaffected - a -v assignment is converted in the C
+# locale either way - so pinning the whole call is enough, and safe: every awk
+# program here emits ASCII and escape codes only.
+awk() { LC_ALL=C command awk "$@"; }
+
 IFS=$'\t' read -r cwd worktree model_name effort_level cost_usd ctx_pct five_hr_pct weekly_pct overage_pct session_id transcript_path scoped_pct scoped_name <<<"$(
-  echo "$input" | jq -r '
+  printf '%s\n' "$input" | jq -r '
     # A model-scoped weekly limit (currently Fable). The field names the CLI
     # uses here are not settled, so every plausible spelling is accepted.
     def scoped:
@@ -94,53 +110,283 @@ if [ -f "$HOME/.claude.json" ]; then
 fi
 
 # ---- palette ----
-# One palette, not two. The theme cannot be detected reliably from inside a
-# status line: COLORFGBG is captured when the shell starts and never updates
-# when the terminal's theme changes under a running session, and a remote host
-# forwards neither it nor macOS's appearance setting. A palette picked from a
-# stale signal is wrong exactly when it matters, so every color here is instead
-# chosen to clear roughly 3:1 contrast against both white and black. The hues
-# are the Claude theme's, pulled to the midpoint of its two palettes.
+# Every color here is the CLI's own, read out of the theme table in the installed
+# binary (v2.1.239) and held in TH under the CLI's key names. The table carries
+# the same 5 value formats the CLI accepts, and sgr_for() turns each into an
+# escape at the end.
 #
-# The /effort colors below are the deliberate exception: every one copies the
-# picker verbatim rather than compromising - the dark theme's value where the
-# CLI themes the color, the single hardcoded value where it does not - so the
-# whole ramp reads exactly as the picker on a dark terminal, and washes out on
-# a light one.
+# /theme writes its choice to settings.json before the next redraw, so that file
+# is the signal - not COLORFGBG, which is captured when the shell starts and
+# never updates. "auto" is the one theme this cannot follow: the CLI resolves it
+# with an OSC 11 background query, and a status line cannot query a terminal
+# whose stdout it is writing. It falls back to dark.
 RESET=$'\033[0m'
 BOLD=$'\033[1m'
 DIM=$'\033[2m'
+
+# The theme name lives in settings.json, read with jq rather than a regex so the
+# whole file's one parser handles it. A local settings file wins over the user's.
+theme=$(jq -r '.theme // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+if [ -f "$HOME/.claude/settings.local.json" ]; then
+  _t=$(jq -r '.theme // empty' "$HOME/.claude/settings.local.json" 2>/dev/null)
+  [ -n "$_t" ] && theme=$_t
+fi
+
+# A custom theme is written "custom:<slug>" and lives in ~/.claude/themes as
+# <slug>.json, holding { "base": <built-in name>, "overrides": { key: color } }.
+# The CLI takes the base's palette and merges the overrides over it, keeping only
+# keys the base already carries. An unreadable file or an unknown base means dark.
+# A theme a plugin supplies has no file here, so it lands on the same fallback.
+_ovr=""
+case "$theme" in
+  custom:*)
+    _base=""
+    _tf="$HOME/.claude/themes/${theme#custom:}.json"
+    if [ -r "$_tf" ]; then
+      _base=$(jq -r '.base // empty' "$_tf" 2>/dev/null)
+      _ovr=$(jq -r '(.overrides // {}) | to_entries[] | "\(.key) \(.value)"' "$_tf" 2>/dev/null)
+    fi
+    case "$_base" in
+      dark|light|dark-ansi|light-ansi|dark-daltonized|light-daltonized) theme=$_base ;;
+      *) theme=dark ;;
+    esac ;;
+esac
+
+# The keys behind each segment:
+#
+#   /effort    low "warning" | medium "success" | high "permission"
+#              xhigh "autoAccept-shimmer" | max the 7 "rainbow_*"
+#              ultracode "violet-ripple"
+#   model      "claude"
+#   labels     "inactive"
+#   git dirty  "error"
+#   gauge      "success" -> "warning" -> "error"
+#
+# The /effort key names are borrowed hues, not meanings: the picker wanted an
+# escalating ramp and reached for the palette entries sitting on it. The gauge's
+# 3 are the same kind of borrowing: no CLI element colors a percentage, so the
+# ramp takes the palette entries that sit on the arc it wants.
+#
+# The cwd and the branch stay out of the table. The only keys near their hues are
+# cyan_FOR_SUBAGENTS_ONLY and pink_FOR_SUBAGENTS_ONLY, which the CLI reserves
+# for subagent labels by name, and neither segment mirrors a CLI element that
+# would settle the question.
+#
+# Each entry is one TH_<key> variable rather than an array element: macOS ships
+# bash 3.2, which has no associative arrays, and this script has to run there.
+# TH_KEYS is the list of keys the table carries, which is also what decides
+# whether a custom theme's override is one the base has.
+#
+# GAUGE_MODE says how the gauge gets 6 bands out of its 3 anchors, and the
+# reason differs per theme. See the gauge section below.
+TH_KEYS="warning success permission autoAccept claude inactive error
+         rainbow_red rainbow_orange rainbow_yellow rainbow_green
+         rainbow_blue rainbow_indigo rainbow_violet"
+case "$theme" in
+  light)
+    TH_warning="rgb(150,108,30)"; TH_success="rgb(44,122,57)"
+    TH_permission="rgb(87,105,247)"; TH_autoAccept="rgb(135,0,255)"
+    TH_claude="rgb(215,119,87)"
+    TH_inactive="rgb(102,102,102)"; TH_error="rgb(171,43,63)"
+    GAUGE_MODE=interp ;;
+  light-daltonized)
+    TH_warning="rgb(255,153,0)"; TH_success="rgb(0,102,153)"
+    TH_permission="rgb(51,102,255)"; TH_autoAccept="rgb(135,0,255)"
+    TH_claude="rgb(255,153,51)"
+    TH_inactive="rgb(102,102,102)"; TH_error="rgb(204,0,0)"
+    GAUGE_MODE=pale ;;
+  dark-daltonized)
+    TH_warning="rgb(255,204,0)"; TH_success="rgb(51,153,255)"
+    TH_permission="rgb(153,204,255)"; TH_autoAccept="rgb(175,135,255)"
+    TH_claude="rgb(255,153,51)"
+    TH_inactive="rgb(153,153,153)"; TH_error="rgb(255,102,102)"
+    GAUGE_MODE=dim ;;
+  dark-ansi)
+    TH_warning="ansi:yellowBright"; TH_success="ansi:greenBright"
+    TH_permission="ansi:blueBright"; TH_autoAccept="ansi:magentaBright"
+    TH_claude="ansi:redBright"
+    TH_inactive="ansi:white"; TH_error="ansi:redBright"
+    GAUGE_MODE=pairs ;;
+  light-ansi)
+    TH_warning="ansi:yellow"; TH_success="ansi:green"
+    TH_permission="ansi:blue"; TH_autoAccept="ansi:magenta"
+    TH_claude="ansi:redBright"
+    TH_inactive="ansi:blackBright"; TH_error="ansi:red"
+    GAUGE_MODE=pairs ;;
+  *)  # dark, plus "auto" and anything unrecognised
+    TH_warning="rgb(255,193,7)"; TH_success="rgb(78,186,101)"
+    TH_permission="rgb(177,185,249)"; TH_autoAccept="rgb(175,135,255)"
+    TH_claude="rgb(215,119,87)"
+    TH_inactive="rgb(153,153,153)"; TH_error="rgb(255,107,128)"
+    GAUGE_MODE=interp ;;
+esac
+
+# The 7 rainbow_* keys hold the same pastels in all 4 truecolor themes and the
+# same 7 terminal colors in both ansi themes, so they need no per-theme branch.
+case "$theme" in
+  dark-ansi|light-ansi)
+    TH_rainbow_red="ansi:red";      TH_rainbow_orange="ansi:redBright"
+    TH_rainbow_yellow="ansi:yellow"; TH_rainbow_green="ansi:green"
+    TH_rainbow_blue="ansi:cyan";    TH_rainbow_indigo="ansi:blue"
+    TH_rainbow_violet="ansi:magenta" ;;
+  *)
+    TH_rainbow_red="rgb(235,95,87)";     TH_rainbow_orange="rgb(245,139,87)"
+    TH_rainbow_yellow="rgb(250,195,95)"; TH_rainbow_green="rgb(145,200,130)"
+    TH_rainbow_blue="rgb(130,170,220)";  TH_rainbow_indigo="rgb(155,130,200)"
+    TH_rainbow_violet="rgb(200,130,180)" ;;
+esac
+
+# Merge a custom theme's overrides, on the CLI's 2 conditions: the base already
+# carries the key, and the value is one of the 5 accepted forms.
+if [ -n "$_ovr" ]; then
+  while read -r _k _v; do
+    [ -n "$_k" ] || continue
+    case " $TH_KEYS " in *[[:space:]]"$_k"[[:space:]]*) ;; *) continue ;; esac
+    case "$_v" in
+      'rgb('*')'|'ansi256('*')'|'ansi:'*) printf -v "TH_$_k" '%s' "$_v" ;;
+      '#'*) case ${#_v} in 4|7) printf -v "TH_$_k" '%s' "$_v" ;; esac ;;
+    esac
+  done <<<"$_ovr"
+fi
+
+# ---- color values to escapes ----
+# The 5 forms the CLI accepts: rgb(r,g,b), #rrggbb, #rgb, ansi256(n), ansi:name.
+ansi_code() {
+  case "$1" in
+    black) printf 30 ;; red) printf 31 ;; green) printf 32 ;; yellow) printf 33 ;;
+    blue) printf 34 ;; magenta) printf 35 ;; cyan) printf 36 ;; white) printf 37 ;;
+    blackBright) printf 90 ;; redBright) printf 91 ;;
+    greenBright) printf 92 ;; yellowBright) printf 93 ;;
+    blueBright) printf 94 ;; magentaBright) printf 95 ;;
+    cyanBright) printf 96 ;; whiteBright) printf 97 ;;
+    *) printf 39 ;;
+  esac
+}
+
 fg() { printf '\033[38;2;%s;%s;%sm' "$1" "$2" "$3"; }
+sgr() { printf '\033[%sm' "$1"; }
 
-C_CLAUDE=$(fg 215 119 87)    # "claude" terracotta - model name
-C_DIR=$(fg 14 140 158)       # cyan - cwd
-C_BRANCH=$(fg 186 92 124)    # rose - git branch
-C_COST=$(fg 107 128 104)     # sage #6b8068 - money spent
-C_LABEL=$(fg 128 128 128)    # "inactive" - labels
-C_ERR=$(fg 208 72 94)        # "error" - git dirty marker
-# gauge ramp, green -> red, anchored on "success"/"warning"/"error"
-GAUGE=("$(fg 46 140 64)" "$(fg 110 150 45)" "$(fg 176 128 18)"
-       "$(fg 196 110 30)" "$(fg 206 84 60)" "$(fg 203 60 80)")
-# /effort picker colors, one per level - the picker's exact values, and the one
-# place this file does not take the two-theme midpoint. The CLI paints each
-# level through a named theme key, so "the picker's color" is only well defined
-# per theme; these are the dark theme's, which is what the picker renders on a
-# dark terminal.
-#
-#   low "warning" | medium "success" | high "permission" | xhigh "autoAccept"
-#
-# The key names are borrowed hues, not meanings: the picker wanted an escalating
-# ramp and reached for the palette entries sitting on it. Matching exactly costs
-# the light-background legibility the rest of this palette keeps - on white these
-# run 1.6-2.7:1 against the ~3:1 floor everything else clears. Deliberate: the
-# picker is the reference, and the picker here is dark.
-E_LOW=$(fg 255 193 7)        # "warning"
-E_MEDIUM=$(fg 78 186 101)    # "success"
-E_HIGH=$(fg 177 185 249)     # "permission"
-E_XHIGH=$(fg 175 135 255)    # "autoAccept" (base under the shimmer)
+# rgb_of prints "r g b", or nothing when the value names a color instead of
+# giving one. The gauge needs numbers, so it checks for an empty result.
+rgb_of() {
+  local v=$1 h
+  case "$v" in
+    'rgb('*')') v=${v#rgb(}; v=${v%)}; printf '%s' "${v//,/ }" ;;
+    '#'*)
+      h=${v#\#}
+      if [ ${#h} = 3 ]; then
+        printf '%d %d %d' "0x${h:0:1}${h:0:1}" "0x${h:1:1}${h:1:1}" "0x${h:2:1}${h:2:1}"
+      elif [ ${#h} = 6 ]; then
+        printf '%d %d %d' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+      fi ;;
+  esac
+}
 
-# The shimmer crest and "violet-ripple" (ultracode) are hardcoded in the CLI
-# rather than themed, so they carry no per-theme ambiguity and are copied
+sgr_for() {
+  local v=$1 rgb
+  case "$v" in
+    'ansi256('*')') v=${v#ansi256(}; sgr "38;5;${v%)}" ; return ;;
+    'ansi:'*) sgr "$(ansi_code "${v#ansi:}")"; return ;;
+  esac
+  rgb=$(rgb_of "$v")
+  [ -n "$rgb" ] && fg $rgb
+}
+
+C_CLAUDE=$(sgr_for "$TH_claude")     # model name
+C_LABEL=$(sgr_for "$TH_inactive")    # labels
+C_ERR=$(sgr_for "$TH_error")         # git dirty marker
+
+# Fixed hues, chosen to clear roughly 3:1 contrast against both white and black
+# so they hold up on either background.
+C_DIR=$(fg 14 140 158)     # cyan - cwd
+C_BRANCH=$(fg 186 92 124)  # rose - git branch
+C_COST=$(fg 107 128 104)   # sage #6b8068 - money spent
+
+E_LOW=$(sgr_for "$TH_warning")        # every level is bold, as the picker
+E_MEDIUM=$(sgr_for "$TH_success")     # draws the selected one
+E_HIGH=$(sgr_for "$TH_permission")
+E_XHIGH=$(sgr_for "$TH_autoAccept")   # the base under the shimmer
+
+# ---- gauge ----
+# Six bands out of 3 anchors: "success", "warning", "error". How depends on how
+# far apart the anchors sit, which is a property of the theme, so GAUGE_MODE is
+# set with the palette above.
+#
+#   interp   dark and light. Their anchors run green to gold to red, so a blend
+#            of 2 neighbours stays on that arc. Bands 0, 2, and 5 are the
+#            anchors, band 1 sits halfway between the first 2, and bands 3 and 4
+#            split the longer run to the third into thirds.
+#   dim      dark-daltonized, and pale for light-daltonized. Their anchors are
+#   pale     blue and yellow, which are complements, so an interpolated midpoint
+#            desaturates to green. A daltonized palette signals state with blue
+#            against yellow so the ramp never leans on green, and putting green
+#            back in the middle of it defeats that. Each anchor takes 2 bands
+#            instead: a weakened step, then the anchor itself. Weakened means
+#            0.65x toward black on the dark theme and 45% toward white on the
+#            light one, so on either background the second band is the louder.
+#   pairs    the 2 ansi themes. A named color has no arithmetic, so each anchor
+#            pairs with its bright or normal sibling.
+#
+# Every mode but interp puts the weaker band of each pair first, so a rising
+# reading always moves toward the louder color.
+#
+# An override can leave a truecolor theme's anchor unusable for arithmetic, by
+# naming an ansi color. That falls through to pairs as well, on the anchor names.
+_ga=$(rgb_of "$TH_success"); _gb=$(rgb_of "$TH_warning"); _gc=$(rgb_of "$TH_error")
+[ -n "$_ga" ] && [ -n "$_gb" ] && [ -n "$_gc" ] || GAUGE_MODE=pairs
+case "$GAUGE_MODE" in
+  pairs)
+    # The sibling of a bright color is its normal form and vice versa; a
+    # truecolor anchor that got here has no sibling, so it repeats.
+    _sib() {
+      local v=${1#ansi:} n
+      case "$v" in
+        *Bright) n=${v%Bright} ;;
+        black|red|green|yellow|blue|magenta|cyan|white) n="${v}Bright" ;;
+        *) sgr_for "$1"; return ;;
+      esac
+      sgr "$(ansi_code "$n")"
+    }
+    GAUGE=()
+    for _k in success warning error; do
+      _n="TH_$_k"
+      GAUGE+=("$(_sib "${!_n}")" "$(sgr_for "${!_n}")")
+    done ;;
+  *)
+    GAUGE=()
+    while IFS= read -r _l; do GAUGE+=("$_l"); done < <(
+      awk -v a="$_ga" -v b="$_gb" -v c="$_gc" -v mode="$GAUGE_MODE" 'BEGIN{
+        split(a, A, " "); split(b, B, " "); split(c, C, " ")
+        for (i = 1; i <= 3; i++) { R[1] = A[1]; G[1] = A[2]; Bl[1] = A[3]
+                                   R[2] = B[1]; G[2] = B[2]; Bl[2] = B[3]
+                                   R[3] = C[1]; G[3] = C[2]; Bl[3] = C[3] }
+        if (mode == "interp") {
+          split("1,0 1,0.5 2,0 2,0.33333 2,0.66667 3,0", band, " ")
+          for (i = 1; i <= 6; i++) {
+            split(band[i], q, ",")
+            k = q[1] + 0; t = q[2] + 0; nx = (k < 3 ? k + 1 : 3)
+            emit(R[k] + (R[nx] - R[k]) * t, G[k] + (G[nx] - G[k]) * t,
+                 Bl[k] + (Bl[nx] - Bl[k]) * t)
+          }
+        } else {
+          # 2 bands per anchor: a weakened step, then the anchor itself.
+          for (k = 1; k <= 3; k++) {
+            if (mode == "dim")
+              emit(R[k] * 0.65, G[k] * 0.65, Bl[k] * 0.65)
+            else
+              emit(R[k] + (255 - R[k]) * 0.45, G[k] + (255 - G[k]) * 0.45,
+                   Bl[k] + (255 - Bl[k]) * 0.45)
+            emit(R[k], G[k], Bl[k])
+          }
+        }
+      }
+      function emit(r, g, b) {
+        printf "%c[38;2;%d;%d;%dm\n", 27, int(r + 0.5), int(g + 0.5), int(b + 0.5)
+      }') ;;
+esac
+
+# The shimmer crest and "violet-ripple" (ultracode) are literals in the CLI
+# rather than theme keys, so they hold one value in every theme and are copied
 # verbatim. The ripple's gradient runs rgb(62,22,118) -> rgb(140,80,240); the
 # status line only ever shows the settled end, which is the picker's fill for
 # the selected row.
@@ -154,29 +400,43 @@ E_ULTRA_FG=$'\033[38;2;255;255;255m'
 # word becomes a smooth slice of gradient, and each frame rotates it by a
 # full stop - subtle within the word, obvious between messages.
 #
-# The stops themselves are the CLI's verbatim. Unlike the four levels above
-# there is no theme to choose between: the seven rainbow_* keys hold the same
-# pastels in every Claude theme, so this match is unconditional. They are also
-# the palette's lightest colors - yellow is 1.6:1 on white - which is the same
-# dark-terminal trade the rest of the effort ramp now makes.
-RAINBOW_SUBSTEPS=6            # interpolated colors between adjacent stops
-RAINBOW_SPREAD=3              # wheel positions between neighbouring letters
-RAINBOW_STEP=$RAINBOW_SUBSTEPS  # wheel positions advanced per frame
-RAINBOW=()
-while IFS= read -r _c; do RAINBOW+=("$_c"); done < <(awk -v n="$RAINBOW_SUBSTEPS" 'BEGIN{
-  split("235,95,87 245,139,87 250,195,95 145,200,130 130,170,220 155,130,200 200,130,180", stops, " ")
-  for (k = 1; k <= 7; k++) { split(stops[k], c, ","); R[k] = c[1]; G[k] = c[2]; B[k] = c[3] }
-  for (k = 1; k <= 7; k++) {
-    nx = (k % 7) + 1
-    for (j = 0; j < n; j++) {
-      t = j / n
-      printf "%c[38;2;%d;%d;%dm\n", 27,
-        int(R[k] + (R[nx] - R[k]) * t + 0.5),
-        int(G[k] + (G[nx] - G[k]) * t + 0.5),
-        int(B[k] + (B[nx] - B[k]) * t + 0.5)
-    }
-  }
-}')
+# Interpolating needs numbers. The 2 ansi themes name their stops instead, and so
+# can a custom theme's override, so the wheel falls back to the 7 stops
+# themselves, advancing one stop per frame.
+RAINBOW_STOPS=""
+for _k in red orange yellow green blue indigo violet; do
+  _n="TH_rainbow_$_k"; _r=$(rgb_of "${!_n}")
+  [ -z "$_r" ] && { RAINBOW_STOPS=""; break; }
+  RAINBOW_STOPS="$RAINBOW_STOPS ${_r// /,}"
+done
+if [ -z "$RAINBOW_STOPS" ]; then
+  RAINBOW=()
+  for _k in red orange yellow green blue indigo violet; do
+    _n="TH_rainbow_$_k"; RAINBOW+=("$(sgr_for "${!_n}")")
+  done
+  RAINBOW_SPREAD=2            # wheel positions between neighbouring letters
+  RAINBOW_STEP=1              # wheel positions advanced per frame
+else
+  RAINBOW_SUBSTEPS=6          # interpolated colors between adjacent stops
+  RAINBOW_SPREAD=3
+  RAINBOW_STEP=$RAINBOW_SUBSTEPS
+  RAINBOW=()
+  while IFS= read -r _c; do RAINBOW+=("$_c"); done < <(
+    awk -v n="$RAINBOW_SUBSTEPS" -v s="$RAINBOW_STOPS" 'BEGIN{
+      split(s, stops, " ")
+      for (k = 1; k <= 7; k++) { split(stops[k], c, ","); R[k] = c[1]; G[k] = c[2]; B[k] = c[3] }
+      for (k = 1; k <= 7; k++) {
+        nx = (k % 7) + 1
+        for (j = 0; j < n; j++) {
+          t = j / n
+          printf "%c[38;2;%d;%d;%dm\n", 27,
+            int(R[k] + (R[nx] - R[k]) * t + 0.5),
+            int(G[k] + (G[nx] - G[k]) * t + 0.5),
+            int(B[k] + (B[nx] - B[k]) * t + 0.5)
+        }
+      }
+    }')
+fi
 
 # ---- animation frame ----
 # The picker animates "xhigh" and "max" on a 100ms timer. A status line only
@@ -216,9 +476,10 @@ segments=()
 seps=()
 add_seg() { segments+=("$1"); seps+=("${2:-bar}"); }
 
-# gauge color: six bands from green to red, so neighbouring readings like
-# 55% and 78% no longer land on the same color.
-#   <30 green | <50 lime | <65 gold | <80 amber | <90 orange | 90+ red
+# gauge color: six bands from "success" to "error", so neighbouring readings
+# like 55% and 78% no longer land on the same color. The thresholds are
+#   <30 | <50 | <65 | <80 | <90 | 90+
+# and the hues come from GAUGE, which the theme decides.
 color_for_pct() {
   local band
   band=$(awk -v p="$1" 'BEGIN{
@@ -297,7 +558,6 @@ shimmer_text() {
   add_seg "$(printf "${BOLD}${C_CLAUDE}%s${RESET}" "$model_name")" bar
 
 # ---- effort level, in the /effort picker's per-level color ----
-# Every level is bold, as the picker draws the selected one.
 if [ -n "$effort_level" ]; then
   case "$effort_level" in
     low)       effort_seg=$(printf "${BOLD}${E_LOW}low${RESET}") ;;
@@ -376,7 +636,11 @@ fi
 # Ambient context that rarely changes, so it is rendered quietly in the label
 # grey rather than competing with the path next to it.
 user_name="${USER:-$(id -un 2>/dev/null)}"
+# "hostname -s" is the short name on macOS, GNU inetutils, and busybox alike,
+# but a stripped-down container may carry no hostname binary at all; bash's own
+# HOSTNAME is the fallback, trimmed of any domain the same way.
 host_name=$(hostname -s 2>/dev/null)
+[ -z "$host_name" ] && host_name="${HOSTNAME%%.*}"
 if [ -n "$user_name" ] || [ -n "$host_name" ]; then
   add_seg "$(printf "${DIM}${C_LABEL}%s@%s${RESET}" "$user_name" "$host_name")" "${loc_started:+space}"
   host_shown=1
