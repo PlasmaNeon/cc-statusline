@@ -3,13 +3,13 @@
 Always one line:
 
 ```
-Opus 5 (1M context) high 󱘲 37% ·  main duhuang@host:~/fb-devices-ai · $1.23(15/300) · 5h 62% 7d 89%
+Opus 5 (1M context) high 󱘲 37% ·  main i@host:~/fb-devices-ai · $1.23(15/300) · 5h 62% 7d 89%
 ```
 
 Too narrow for the whole thing, and the terminal clips the tail:
 
 ```
-Opus 5 (1M context) high 󱘲 37% ·  main duhuang@host:~/fb-de…
+Opus 5 (1M context) high 󱘲 37% ·  main i@host:~/fb-de…
 ```
 
 ## Install
