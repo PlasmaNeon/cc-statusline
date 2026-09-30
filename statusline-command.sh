@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Claude Code statusLine command.
 #
-# Segments (in order): model name, effort level, context-window usage %,
-# git branch, user@machine, current directory, session cost ($ spent),
-# 5-hour and weekly rate-limit %, the model-scoped weekly rate-limit %
-# (Fable), the overage limit % (if the CLI ever exposes it in the live
-# payload), and the account's usage-credit balance ((used/limit), from
-# the local usage cache).
+# Two lines. The first: model name, effort level, context-window usage %,
+# session cost ($ spent) with the account's usage-credit balance ((used/limit),
+# from the local usage cache), 5-hour and weekly rate-limit %, the model-scoped
+# weekly rate-limit % (Fable), and the overage limit % (if the CLI ever exposes
+# it in the live payload). The second: git branch, user@machine, current
+# directory.
 #
-# They are always emitted as one line, in that order. Nothing is wrapped or
-# re-flowed here; a window too narrow for the whole line simply clips its tail.
+# Nothing is wrapped or re-flowed here; a window too narrow for a line simply
+# clips its tail.
 # See the join at the bottom of the file for why measuring is the worse option.
 #
 # Colors are the literal Claude theme palettes read out of the installed CLI
@@ -472,6 +472,7 @@ FRAME=$(anim_frame)
 #   bar_tight  the same " · " divider, but bound to the previous segment
 #   space      a single space, bound to the previous segment
 #   colon      a tight ":", bound to the previous segment
+#   newline    starts the second line
 segments=()
 seps=()
 add_seg() { segments+=("$1"); seps+=("${2:-bar}"); }
@@ -580,8 +581,30 @@ fi
 # purely a rendering change.
 [ -n "$ctx_pct" ] && add_seg "$(gauge_segment "󱘲" "$ctx_pct")" space
 
+# ---- money spent this session (authoritative value from the CLI), with the
+# account's usage-credit balance bound tightly to it: "$1.23(1502/3000)" ----
+money_seg=""
+if [ -n "$cost_usd" ]; then
+  cost_str=$(awk -v c="$cost_usd" 'BEGIN{printf "%.2f", c+0}')
+  money_seg=$(printf "${C_COST}\$%s${RESET}" "$cost_str")
+fi
+if [ -n "$credits_used_minor" ] && [ -n "$credits_limit_minor" ]; then
+  money_seg="${money_seg}$(credits_segment "$credits_used_minor" \
+    "$credits_limit_minor" "$credits_exp" "$credits_pct")"
+fi
+[ -n "$money_seg" ] && add_seg "$money_seg" bar
 
+# ---- rate limits, kept on the same line as the cost ----
+# The model-scoped limit is labelled with its own display name, so it reads
+# "Fable 7%" rather than a fixed abbreviation, and follows a rename by itself.
+[ -n "$five_hr_pct" ] && add_seg "$(gauge_segment 5h "$five_hr_pct")" bar_tight
+[ -n "$weekly_pct" ]  && add_seg "$(gauge_segment 7d "$weekly_pct")" space
+[ -n "$scoped_pct" ] && [ -n "$scoped_name" ] &&
+  add_seg "$(gauge_segment "$scoped_name" "$scoped_pct")" space
+[ -n "$overage_pct" ] && add_seg "$(gauge_segment ovr "$overage_pct")" space
 
+# ---- second line: git branch, user@machine, directory ----
+# The group always opens a new line, whichever of its segments renders first.
 
 # ---- git branch (icon + name) with dirty / ahead-behind marker ----
 branch="$worktree"
@@ -628,7 +651,7 @@ if [ -n "$branch" ]; then
 
   git_seg=$(printf "${C_BRANCH} %s${RESET}" "$branch")
   [ -n "$status_str" ] && git_seg="${git_seg}$(printf "${C_ERR}[%s]${RESET}" "$status_str")"
-  add_seg "$git_seg" bar
+  add_seg "$git_seg" newline
   loc_started=1
 fi
 
@@ -642,7 +665,8 @@ user_name="${USER:-$(id -un 2>/dev/null)}"
 host_name=$(hostname -s 2>/dev/null)
 [ -z "$host_name" ] && host_name="${HOSTNAME%%.*}"
 if [ -n "$user_name" ] || [ -n "$host_name" ]; then
-  add_seg "$(printf "${DIM}${C_LABEL}%s@%s${RESET}" "$user_name" "$host_name")" "${loc_started:+space}"
+  add_seg "$(printf "${DIM}${C_LABEL}%s@%s${RESET}" "$user_name" "$host_name")" \
+    "$([ -n "$loc_started" ] && echo space || echo newline)"
   host_shown=1
   loc_started=1
 fi
@@ -664,52 +688,28 @@ read_only=""
 [ -d "$cwd" ] && [ ! -w "$cwd" ] && read_only=" 󰌾"
 
 # ":" only reads as a path separator directly after the host; behind the
-# branch alone it would be nonsense, and first in the group it needs the
-# divider the other groups get.
+# branch alone it would be nonsense, and first in the group it opens the line.
 if   [ -n "$host_shown" ];  then dir_sep=colon
 elif [ -n "$loc_started" ]; then dir_sep=space
-else                             dir_sep=bar
+else                             dir_sep=newline
 fi
 add_seg "$(printf "${C_DIR}%s${RESET}" "${path_display}${read_only}")" "$dir_sep"
 
-# ---- money spent this session (authoritative value from the CLI), with the
-# account's usage-credit balance bound tightly to it: "$1.23(1502/3000)" ----
-money_seg=""
-if [ -n "$cost_usd" ]; then
-  cost_str=$(awk -v c="$cost_usd" 'BEGIN{printf "%.2f", c+0}')
-  money_seg=$(printf "${C_COST}\$%s${RESET}" "$cost_str")
-fi
-if [ -n "$credits_used_minor" ] && [ -n "$credits_limit_minor" ]; then
-  money_seg="${money_seg}$(credits_segment "$credits_used_minor" \
-    "$credits_limit_minor" "$credits_exp" "$credits_pct")"
-fi
-[ -n "$money_seg" ] && add_seg "$money_seg" bar
-
-# ---- rate limits, kept on the same line as the cost ----
-# The model-scoped limit is labelled with its own display name, so it reads
-# "Fable 7%" rather than a fixed abbreviation, and follows a rename by itself.
-[ -n "$five_hr_pct" ] && add_seg "$(gauge_segment 5h "$five_hr_pct")" bar_tight
-[ -n "$weekly_pct" ]  && add_seg "$(gauge_segment 7d "$weekly_pct")" space
-[ -n "$scoped_pct" ] && [ -n "$scoped_name" ] &&
-  add_seg "$(gauge_segment "$scoped_name" "$scoped_pct")" space
-[ -n "$overage_pct" ] && add_seg "$(gauge_segment ovr "$overage_pct")" space
-
-
-
 # ---- join: dim divider between segments, one space within a group ----
 #
-# The line is emitted whole, at whatever length it comes to, and is never
+# Each line is emitted whole, at whatever length it comes to, and is never
 # pre-wrapped to a measured terminal width. The CLI renders each status line
 # with wrap="truncate", so a line too wide for the window is clipped by the
-# terminal on the way out - which costs only the tail (the rate-limit gauges),
-# and costs nothing at all at any width the content already fits.
+# terminal on the way out - which costs only its tail (the rate-limit gauges on
+# the first, the path on the second), and costs nothing at all at any width the
+# content already fits.
 #
 # Measuring instead would be worse, not better. The CLI re-runs this command
 # when session state changes - a new message, a token count, a model or effort
 # switch - and a terminal resize is not one of those triggers. A layout chosen
 # from the width at render time therefore survives the resize that invalidated
-# it, and an idle session can sit on a two-line split long after the window
-# grew wide enough for one. Clipping is re-evaluated by the terminal on every
+# it, and an idle session can sit on a wrapped line long after the window
+# grew wide enough to hold it. Clipping is re-evaluated by the terminal on every
 # repaint, so it is always current.
 out=""
 idx=0
@@ -718,9 +718,10 @@ while [ "$idx" -lt "${#segments[@]}" ]; do
     out="${segments[$idx]}"
   else
     case "${seps[$idx]}" in
-      colon) out="${out}${DIM}${C_LABEL}:${RESET}${segments[$idx]}" ;;
-      space) out="${out} ${segments[$idx]}" ;;
-      *)     out="${out} ${DIM}${C_LABEL}·${RESET} ${segments[$idx]}" ;;
+      colon)   out="${out}${DIM}${C_LABEL}:${RESET}${segments[$idx]}" ;;
+      newline) out="${out}"$'\n'"${segments[$idx]}" ;;
+      space)   out="${out} ${segments[$idx]}" ;;
+      *)       out="${out} ${DIM}${C_LABEL}·${RESET} ${segments[$idx]}" ;;
     esac
   fi
   idx=$((idx + 1))

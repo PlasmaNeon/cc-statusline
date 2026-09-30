@@ -1,15 +1,17 @@
 # Claude Code status line
 
-Always one line:
+Two lines — the session and its limits, then where you are:
 
 ```
-Opus 5 (1M context) high 󱘲 37% ·  main i@host:~/fb-devices-ai · $1.23(15/300) · 5h 62% 7d 89%
+Opus 5 (1M context) high 󱘲 37% · $1.23(15/300) · 5h 62% 7d 89%
+ main i@host:~/fb-devices-ai
 ```
 
-Too narrow for the whole thing, and the terminal clips the tail:
+Too narrow for a line, and the terminal clips its tail:
 
 ```
-Opus 5 (1M context) high 󱘲 37% ·  main i@host:~/fb-de…
+Opus 5 (1M context) high 󱘲 37% · $1.23(15/…
+ main i@host:~/fb-de…
 ```
 
 ## Install
@@ -49,15 +51,17 @@ Nerd Font is needed for three glyphs; without one they show as boxes — see
 
 | Segment | Notes |
 |---|---|
+| **line 1** | |
 | model | bold, Claude terracotta |
 | effort | the per-level colors from the `/effort` picker, in the active theme |
 | `󱘲 NN%` | context window used, grouped with the effort level — the label is `nf-md-database_outline`, so it needs a Nerd Font |
-| branch | git branch, with `+` staged, `!` modified, `?` untracked, `=` conflict, `<`/`>` behind/ahead |
-| `user@host:path` | path shortened to `~` and its last 3 components |
 | `$N.NN` | session cost, from the CLI's own `cost.total_cost_usd` |
 | `(used/limit)` | usage-credit balance in dollars, bound tight to the cost — see *Usage credits* |
 | `5h` / `7d` | rate limit usage |
 | `Fable NN%` | the model-scoped weekly limit — see *Model-scoped limit* |
+| **line 2** | |
+| branch | git branch, with `+` staged, `!` modified, `?` untracked, `=` conflict, `<`/`>` behind/ahead |
+| `user@host:path` | path shortened to `~` and its last 3 components |
 
 Percentages use a six-band color ramp at `<30`, `<50`, `<65`, `<80`, `<90`,
 `90+`, built from the active theme's `success`, `warning`, and `error` — see
@@ -79,8 +83,8 @@ it follows a rename rather than hardcoding "Fable", and it is omitted entirely
 when no such limit exists. A separate `ovr` segment shows the overage limit if
 the payload ever carries one.
 
-Both sit at the tail of the line, so they are the first thing a narrow window
-clips.
+Both sit at the tail of the first line, so they are the first thing a narrow
+window clips.
 
 ## Usage credits
 
@@ -97,18 +101,20 @@ get no segment — the cost stands alone.
 
 ## Layout
 
-Everything is emitted as a single line, in segment order, at whatever length it
-comes to. Nothing is measured and nothing is pre-wrapped: the CLI renders each
+Two lines, in segment order: the session (model, effort, context, cost, limits),
+then the location (branch, `user@host:path`). Each is emitted at whatever length
+it comes to. Nothing is measured and nothing is pre-wrapped: the CLI renders each
 status line with `wrap="truncate"`, so a line wider than the window is clipped
-by the terminal on the way out. That costs only the tail — the rate-limit
-gauges — and costs nothing at any width the content already fits.
+by the terminal on the way out. That costs only its tail — the rate-limit gauges
+on the first, the path on the second — and costs nothing at any width the
+content already fits.
 
 Measuring would be worse, not better. The CLI re-runs this command when *session
 state* changes — a new message, a token count, a model or effort switch — and a
 terminal resize is not one of those triggers. A layout chosen from the width at
 render time therefore outlives the resize that invalidated it, and an idle
-session sits on a stale two-line split long after the window grew wide enough
-for one. Clipping is re-evaluated by the terminal on every repaint, so it is
+session sits on a stale wrapped line long after the window grew wide enough to
+hold it. Clipping is re-evaluated by the terminal on every repaint, so it is
 always current.
 
 Order it front to back, then: the segments you always want visible go first.
@@ -171,9 +177,9 @@ All near the top of `statusline-command.sh`:
 
 Layout is built from `add_seg "<text>" <separator>` calls in source order.
 Separators: `bar` (` · ` between groups), `bar_tight` (same divider, bound to
-the previous segment), `space`, `colon`. Reorder the calls to reorder the bar;
-a separator chosen at runtime lets a group open with `bar` whether or not the
-segment ahead of it was rendered.
+the previous segment), `space`, `colon`, `newline` (starts the second line).
+Reorder the calls to reorder the bar; a separator chosen at runtime lets a group
+open with `bar` or `newline` whether or not the segment ahead of it was rendered.
 
 ### Nerd Font glyphs
 
