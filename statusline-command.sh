@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Claude Code statusLine command.
 #
-# Two lines. The first: model name, effort level, context-window usage %,
-# session cost ($ spent) with the account's usage-credit balance ((used/limit),
-# from the local usage cache), 5-hour and weekly rate-limit %, the model-scoped
-# weekly rate-limit % (Fable), and the overage limit % (if the CLI ever exposes
-# it in the live payload). The second: git branch, user@machine, current
-# directory.
+# Segments (in order): model name, effort level, context-window usage %,
+# git branch, user@machine, current directory, session cost ($ spent) with the
+# account's usage-credit balance ((used/limit), from the local usage cache),
+# 5-hour and weekly rate-limit %, the model-scoped weekly rate-limit % (Fable),
+# and the overage limit % (if the CLI ever exposes it in the live payload).
 #
-# Nothing is wrapped or re-flowed here; a window too narrow for a line simply
-# clips its tail.
-# See the join at the bottom of the file for why measuring is the worse option.
+# That is one line when the terminal is wide enough. Otherwise the location
+# group - branch, user@machine, directory - moves to a second line. See the
+# join at the bottom.
 #
 # Colors are the literal Claude theme palettes read out of the installed CLI
 # (v2.1.239). The /effort ramp, the labels, the git-dirty marker, and the gauge
@@ -472,10 +471,17 @@ FRAME=$(anim_frame)
 #   bar_tight  the same " · " divider, but bound to the previous segment
 #   space      a single space, bound to the previous segment
 #   colon      a tight ":", bound to the previous segment
-#   newline    starts the second line
+#
+# and the group it belongs to, from $grp at the time it is added:
+#   head       model, effort, context
+#   loc        branch, user@machine, directory
+#   tail       cost, credits, rate limits
+# One line runs head, loc, tail; two lines put loc second. See the join.
 segments=()
 seps=()
-add_seg() { segments+=("$1"); seps+=("${2:-bar}"); }
+groups=()
+grp=head
+add_seg() { segments+=("$1"); seps+=("${2:-bar}"); groups+=("$grp"); }
 
 # gauge color: six bands from "success" to "error", so neighbouring readings
 # like 55% and 78% no longer land on the same color. The thresholds are
@@ -581,30 +587,8 @@ fi
 # purely a rendering change.
 [ -n "$ctx_pct" ] && add_seg "$(gauge_segment "󱘲" "$ctx_pct")" space
 
-# ---- money spent this session (authoritative value from the CLI), with the
-# account's usage-credit balance bound tightly to it: "$1.23(1502/3000)" ----
-money_seg=""
-if [ -n "$cost_usd" ]; then
-  cost_str=$(awk -v c="$cost_usd" 'BEGIN{printf "%.2f", c+0}')
-  money_seg=$(printf "${C_COST}\$%s${RESET}" "$cost_str")
-fi
-if [ -n "$credits_used_minor" ] && [ -n "$credits_limit_minor" ]; then
-  money_seg="${money_seg}$(credits_segment "$credits_used_minor" \
-    "$credits_limit_minor" "$credits_exp" "$credits_pct")"
-fi
-[ -n "$money_seg" ] && add_seg "$money_seg" bar
-
-# ---- rate limits, kept on the same line as the cost ----
-# The model-scoped limit is labelled with its own display name, so it reads
-# "Fable 7%" rather than a fixed abbreviation, and follows a rename by itself.
-[ -n "$five_hr_pct" ] && add_seg "$(gauge_segment 5h "$five_hr_pct")" bar_tight
-[ -n "$weekly_pct" ]  && add_seg "$(gauge_segment 7d "$weekly_pct")" space
-[ -n "$scoped_pct" ] && [ -n "$scoped_name" ] &&
-  add_seg "$(gauge_segment "$scoped_name" "$scoped_pct")" space
-[ -n "$overage_pct" ] && add_seg "$(gauge_segment ovr "$overage_pct")" space
-
-# ---- second line: git branch, user@machine, directory ----
-# The group always opens a new line, whichever of its segments renders first.
+# ---- location: git branch, user@machine, directory ----
+grp=loc
 
 # ---- git branch (icon + name) with dirty / ahead-behind marker ----
 branch="$worktree"
@@ -651,7 +635,7 @@ if [ -n "$branch" ]; then
 
   git_seg=$(printf "${C_BRANCH} %s${RESET}" "$branch")
   [ -n "$status_str" ] && git_seg="${git_seg}$(printf "${C_ERR}[%s]${RESET}" "$status_str")"
-  add_seg "$git_seg" newline
+  add_seg "$git_seg" bar
   loc_started=1
 fi
 
@@ -665,8 +649,7 @@ user_name="${USER:-$(id -un 2>/dev/null)}"
 host_name=$(hostname -s 2>/dev/null)
 [ -z "$host_name" ] && host_name="${HOSTNAME%%.*}"
 if [ -n "$user_name" ] || [ -n "$host_name" ]; then
-  add_seg "$(printf "${DIM}${C_LABEL}%s@%s${RESET}" "$user_name" "$host_name")" \
-    "$([ -n "$loc_started" ] && echo space || echo newline)"
+  add_seg "$(printf "${DIM}${C_LABEL}%s@%s${RESET}" "$user_name" "$host_name")" "${loc_started:+space}"
   host_shown=1
   loc_started=1
 fi
@@ -688,42 +671,125 @@ read_only=""
 [ -d "$cwd" ] && [ ! -w "$cwd" ] && read_only=" 󰌾"
 
 # ":" only reads as a path separator directly after the host; behind the
-# branch alone it would be nonsense, and first in the group it opens the line.
+# branch alone it would be nonsense, and first in the group it needs the
+# divider the other groups get.
 if   [ -n "$host_shown" ];  then dir_sep=colon
 elif [ -n "$loc_started" ]; then dir_sep=space
-else                             dir_sep=newline
+else                             dir_sep=bar
 fi
 add_seg "$(printf "${C_DIR}%s${RESET}" "${path_display}${read_only}")" "$dir_sep"
 
+grp=tail
+
+# ---- money spent this session (authoritative value from the CLI), with the
+# account's usage-credit balance bound tightly to it: "$1.23(1502/3000)" ----
+money_seg=""
+if [ -n "$cost_usd" ]; then
+  cost_str=$(awk -v c="$cost_usd" 'BEGIN{printf "%.2f", c+0}')
+  money_seg=$(printf "${C_COST}\$%s${RESET}" "$cost_str")
+fi
+if [ -n "$credits_used_minor" ] && [ -n "$credits_limit_minor" ]; then
+  money_seg="${money_seg}$(credits_segment "$credits_used_minor" \
+    "$credits_limit_minor" "$credits_exp" "$credits_pct")"
+fi
+[ -n "$money_seg" ] && add_seg "$money_seg" bar
+
+# ---- rate limits, kept on the same line as the cost ----
+# The model-scoped limit is labelled with its own display name, so it reads
+# "Fable 7%" rather than a fixed abbreviation, and follows a rename by itself.
+[ -n "$five_hr_pct" ] && add_seg "$(gauge_segment 5h "$five_hr_pct")" bar_tight
+[ -n "$weekly_pct" ]  && add_seg "$(gauge_segment 7d "$weekly_pct")" space
+[ -n "$scoped_pct" ] && [ -n "$scoped_name" ] &&
+  add_seg "$(gauge_segment "$scoped_name" "$scoped_pct")" space
+[ -n "$overage_pct" ] && add_seg "$(gauge_segment ovr "$overage_pct")" space
+
 # ---- join: dim divider between segments, one space within a group ----
 #
-# Each line is emitted whole, at whatever length it comes to, and is never
-# pre-wrapped to a measured terminal width. The CLI renders each status line
-# with wrap="truncate", so a line too wide for the window is clipped by the
-# terminal on the way out - which costs only its tail (the rate-limit gauges on
-# the first, the path on the second), and costs nothing at all at any width the
-# content already fits.
+# One line when it fits - head, loc, tail - otherwise two: head and tail on the
+# first, loc on the second. The CLI sets COLUMNS from its own
+# terminal (a tmux pane's width inside tmux) every time it runs this command,
+# and it runs it on the same events that move the cost - a message, a token
+# count, a model or effort switch. So the choice is remade from the current
+# window and the current branch and path on every one of those redraws. A
+# resize alone is not a trigger; the next message picks it up.
 #
-# Measuring instead would be worse, not better. The CLI re-runs this command
-# when session state changes - a new message, a token count, a model or effort
-# switch - and a terminal resize is not one of those triggers. A layout chosen
-# from the width at render time therefore survives the resize that invalidated
-# it, and an idle session can sit on a wrapped line long after the window
-# grew wide enough to hold it. Clipping is re-evaluated by the terminal on every
-# repaint, so it is always current.
-out=""
-idx=0
-while [ "$idx" -lt "${#segments[@]}" ]; do
-  if [ "$idx" -eq 0 ]; then
-    out="${segments[$idx]}"
-  else
-    case "${seps[$idx]}" in
-      colon)   out="${out}${DIM}${C_LABEL}:${RESET}${segments[$idx]}" ;;
-      newline) out="${out}"$'\n'"${segments[$idx]}" ;;
-      space)   out="${out} ${segments[$idx]}" ;;
-      *)       out="${out} ${DIM}${C_LABEL}·${RESET} ${segments[$idx]}" ;;
-    esac
+# The CLI draws the line with the statusLine "padding" setting on each side, so
+# that comes off the width. FIT_MARGIN is slack on top: a one-line form that
+# lands on the last column would be clipped rather than split if the CLI insets
+# the row at all, so it splits a little early instead.
+#
+# Either line is still emitted whole. The CLI renders each with wrap="truncate",
+# so a line too wide even on its own is clipped by the terminal - costing its
+# end (the rate-limit gauges on the first, the path on the second).
+FIT_MARGIN=2
+
+# Display width: escapes stripped, UTF-8 continuation bytes not counted. Every
+# glyph here is one cell wide, so characters are columns.
+vis_width() {
+  printf '%s' "$1" | LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' |
+    LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' '
+}
+
+# Join one group's segments; its first segment takes no separator.
+join_group() {
+  local want=$1 cur="" idx=0 seg
+  while [ "$idx" -lt "${#segments[@]}" ]; do
+    if [ "${groups[$idx]}" = "$want" ]; then
+      seg="${segments[$idx]}"
+      if [ -z "$cur" ]; then
+        cur=$seg
+      else
+        case "${seps[$idx]}" in
+          colon) cur="${cur}${DIM}${C_LABEL}:${RESET}${seg}" ;;
+          space) cur="${cur} ${seg}" ;;
+          *)     cur="${cur} ${DIM}${C_LABEL}·${RESET} ${seg}" ;;
+        esac
+      fi
+    fi
+    idx=$((idx + 1))
+  done
+  printf '%s' "$cur"
+}
+
+# Join non-empty parts with the " · " divider.
+join_bar() {
+  local out="" part
+  for part in "$@"; do
+    [ -n "$part" ] || continue
+    if [ -z "$out" ]; then out=$part
+    else out="${out} ${DIM}${C_LABEL}·${RESET} ${part}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+head_str=$(join_group head)
+loc_str=$(join_group loc)
+tail_str=$(join_group tail)
+line1=$(join_bar "$head_str" "$tail_str")
+line2=$loc_str
+
+if [ -z "$line1" ] || [ -z "$line2" ]; then
+  out=$(join_bar "$head_str" "$loc_str" "$tail_str")
+else
+  cols=${COLUMNS:-}
+  if [ -z "$cols" ] && [ -n "${TMUX_PANE:-}" ]; then
+    cols=$(tmux display -p -t "$TMUX_PANE" '#{pane_width}' 2>/dev/null)
   fi
-  idx=$((idx + 1))
-done
+  pad=$(jq -r '.statusLine.padding // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+  if [ -f "$HOME/.claude/settings.local.json" ]; then
+    _p=$(jq -r '.statusLine.padding // empty' "$HOME/.claude/settings.local.json" 2>/dev/null)
+    [ -n "$_p" ] && pad=$_p
+  fi
+  case "$pad" in ''|*[!0-9]*) pad=0 ;; esac
+  one=$(join_bar "$head_str" "$loc_str" "$tail_str")
+  # Unknown width: one line, clipped by the terminal if it has to be.
+  case "$cols" in ''|*[!0-9]*) cols="" ;; esac
+  if [ -z "$cols" ] ||
+     [ "$(vis_width "$one")" -le $((cols - 2 * pad - FIT_MARGIN)) ]; then
+    out=$one
+  else
+    out="${line1}"$'\n'"${line2}"
+  fi
+fi
 printf '%s' "$out"
